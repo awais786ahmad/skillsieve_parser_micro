@@ -1,0 +1,46 @@
+# Core
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# Redis / Queue
+redis
+hiredis
+
+# Database
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Resume Parsing
+pymupdf
+python-docx
+textract
+
+# Text Processing
+unidecode
+regex
+ftfy
+
+# Data Extraction
+email-validator
+phonenumbers
+python-dateutil
+validators
+
+# NLP
+spacy
+
+# File Handling
+httpx
+aiofiles
+
+# Logging
+loguru
+rich
+
+# Utilities
+orjson
+tenacity
+uuid6
