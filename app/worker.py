@@ -1,38 +1,100 @@
+import asyncio
 import json
-import redis
-import requests
-from services.downloader import download_resume
-from services.extractor import extract_text
-from services.parser import parse_resume
-from services.ats_scorer import calculate_ats_score
-from config import settings
+import logging
+import socket
 
-r = redis.from_url(settings.REDIS_URL)
+from app.queues.redis_client import redis_client
+from app.schemas.resume_job import ResumeJobPayload
+from app.clients.nest_client import update_resume_status
 
-def process_job(job):
-    resume_id = job["resumeId"]
-    file_url = job["fileUrl"]
+STREAM_NAME = "resume-jobs"
+GROUP_NAME = "resume-workers"
+CONSUMER_NAME = socket.gethostname()
+
+logging.basicConfig(level=logging.INFO)
+
+# ---------- JOB PROCESSOR ----------
+
+async def process_job(job_data: dict):
+    payload = ResumeJobPayload(**job_data)
+
+    logging.info(f"[PROCESSING] resume_id={payload.resume_id}")
+
+    await update_resume_status(payload.resume_id, "processing")
 
     try:
-        path = download_resume(file_url)
-        text = extract_text(path)
-        parsed = parse_resume(text)
-        ats = calculate_ats_score(text)
-
-        payload = {
-            "resume_id": resume_id,
-            "parsed_data": parsed,
-            "ats_score": ats
+        parsed_data = {
+            "identity": {},
+            "skills": [],
         }
 
-        requests.post(
-            f"{settings.NEST_API_URL}/internal/resumes/processed",
-            json=payload,
-            headers={"x-service-secret": settings.SERVICE_SECRET}
+        await update_resume_status(
+            payload.resume_id,
+            "parsed",
+            payload=parsed_data
         )
 
+        logging.info(f"[SUCCESS] resume_id={payload.resume_id}")
+
     except Exception as e:
-        requests.post(
-            f"{settings.NEST_API_URL}/internal/resumes/failed",
-            json={"resume_id": resume_id, "error": str(e)}
+        logging.exception("Parsing failed")
+
+        await update_resume_status(
+            payload.resume_id,
+            "failed",
+            error=str(e)
         )
+        raise
+
+
+# ---------- STREAM CONSUMER ----------
+
+async def consume_stream():
+    # Create consumer group (idempotent)
+    try:
+        await redis_client.xgroup_create(
+            STREAM_NAME,
+            GROUP_NAME,
+            id="0",
+            mkstream=True,
+        )
+    except Exception:
+        pass  # already exists
+
+    logging.info(
+        f"Worker started | group={GROUP_NAME} consumer={CONSUMER_NAME}"
+    )
+
+    while True:
+        messages = await redis_client.xreadgroup(
+            GROUP_NAME,
+            CONSUMER_NAME,
+            streams={STREAM_NAME: ">"},
+            count=1,
+            block=5000,
+        )
+
+        for _, entries in messages:
+            for message_id, data in entries:
+                try:
+                    payload = json.loads(data["payload"])
+                    await process_job(payload)
+
+                    await redis_client.xack(
+                        STREAM_NAME,
+                        GROUP_NAME,
+                        message_id,
+                    )
+
+                except Exception:
+                    logging.exception("Job failed")
+                    # NO ACK → message can be retried
+
+
+# ---------- ENTRYPOINT ----------
+
+async def start_worker():
+    await consume_stream()
+
+if __name__ == "__main__":
+    asyncio.run(start_worker())
