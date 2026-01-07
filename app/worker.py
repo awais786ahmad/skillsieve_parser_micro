@@ -6,6 +6,8 @@ import socket
 from app.queues.redis_client import redis_client
 from app.schemas.resume_job import ResumeJobPayload
 from app.clients.nest_client import update_resume_status
+from app.parsers.pipeline import prepare_file
+from app.core.logger import logger
 
 STREAM_NAME = "resume-jobs"
 GROUP_NAME = "resume-workers"
@@ -18,11 +20,20 @@ logging.basicConfig(level=logging.INFO)
 async def process_job(job_data: dict):
     payload = ResumeJobPayload(**job_data)
 
-    logging.info(f"[PROCESSING] resume_id={payload.resume_id}")
+    logger.info(f"[PROCESSING] resume_id={payload.resume_id}")
 
     await update_resume_status(payload.resume_id, "processing")
 
     try:
+        file_ctx = await prepare_file(
+            resume_id=payload.resume_id,
+            file_url=payload.file_url,
+        )
+
+        logger.info(
+            f"[READY_FOR_PARSE] type={file_ctx['type']}"
+        )
+
         parsed_data = {
             "identity": {},
             "skills": [],
@@ -34,10 +45,8 @@ async def process_job(job_data: dict):
             payload=parsed_data
         )
 
-        logging.info(f"[SUCCESS] resume_id={payload.resume_id}")
-
     except Exception as e:
-        logging.exception("Parsing failed")
+        logger.exception("Parsing failed")
 
         await update_resume_status(
             payload.resume_id,
@@ -45,8 +54,6 @@ async def process_job(job_data: dict):
             error=str(e)
         )
         raise
-
-
 # ---------- STREAM CONSUMER ----------
 
 async def consume_stream():

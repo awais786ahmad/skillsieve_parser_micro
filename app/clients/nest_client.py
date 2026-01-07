@@ -13,7 +13,6 @@ async def update_resume_status(
     logger.info(
         f"[CALLBACK] resume_id={resume_id} status={status}"
     )
-    print(url, status, payload, error, resume_id, settings.NEST_INTERNAL_API_KEY.strip())
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
